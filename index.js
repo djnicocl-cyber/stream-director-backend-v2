@@ -141,11 +141,27 @@ app.get("/api/rooms/:roomId/selected", async (req, res) => {
   try {
     const room = await getRoom(req.params.roomId);
     if (!room) return res.status(404).json({ error: "Sala no encontrada" });
-    res.json({ selected: room.selectedParticipant });
+    res.json({ selected: room.selectedParticipant, closed: room.closed || false });
   } catch (err) {
     console.error("Error al obtener seleccion:", err);
     res.status(500).json({ error: "Error al obtener seleccion" });
   }
 });
 
+
+app.post("/api/rooms/:roomId/close", async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const key = `room:${roomId.toUpperCase()}`;
+    const raw = await redis.get(key);
+    if (!raw) return res.status(404).json({ error: "Sala no encontrada" });
+    const room = JSON.parse(raw);
+    room.closed = true;
+    await redis.set(key, JSON.stringify(room));
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Error al cerrar sala:", err);
+    res.status(500).json({ error: "Error al cerrar sala" });
+  }
+});
 app.listen(PORT, () => console.log(`Backend corriendo en puerto ${PORT}`));
