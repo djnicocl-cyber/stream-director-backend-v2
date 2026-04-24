@@ -54,8 +54,8 @@ app.get("/", (req, res) => res.json({ status: "ok" }));
 
 app.post("/api/rooms", async (req, res) => {
   try {
-    const { name } = req.body;
-    const roomId = uuidv4().slice(0, 8).toUpperCase();
+    const { name, roomId: customRoomId } = req.body;
+    const roomId = (customRoomId || '').trim().toUpperCase() || uuidv4().slice(0, 8).toUpperCase();
     const room = { id: roomId, name: name || "Evento", createdAt: new Date().toISOString(), selectedParticipant: null };
     await setRoom(roomId, room);
     res.json({ roomId, room });
