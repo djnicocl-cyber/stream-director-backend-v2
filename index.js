@@ -158,6 +158,7 @@ app.post("/api/rooms/:roomId/close", async (req, res) => {
     const room = JSON.parse(raw);
     room.closed = true;
     await redis.set(key, JSON.stringify(room));
+    setTimeout(async()=>{try{await redis.del(key);}catch(e){}},30000);
     res.json({ ok: true });
   } catch (err) {
     console.error("Error al cerrar sala:", err);
