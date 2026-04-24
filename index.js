@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -165,4 +166,19 @@ app.post("/api/rooms/:roomId/close", async (req, res) => {
     res.status(500).json({ error: "Error al cerrar sala" });
   }
 });
+app.post("/api/auth/operator", (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) return res.status(400).json({ ok: false });
+    const hash = crypto.createHash("sha256").update(password).digest("hex");
+    const stored = process.env.OPERATOR_PASSWORD_HASH;
+    if (!stored) return res.status(500).json({ ok: false, error: "No configurado" });
+    if (hash.length !== stored.length) return res.json({ ok: false });
+    const ok = crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(stored, "hex"));
+    res.json({ ok });
+  } catch (err) {
+    res.status(500).json({ ok: false });
+  }
+});
+
 app.listen(PORT, () => console.log(`Backend corriendo en puerto ${PORT}`));
