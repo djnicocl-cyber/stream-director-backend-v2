@@ -37,10 +37,10 @@ const redis = new Redis(REDIS_URL, {
 redis.on("connect", () => console.log("Redis conectado"));
 redis.on("error", (err) => console.error("Redis error:", err.message));
 
-// RoomService para expulsar participantes duplicados
 const livekitHost = LIVEKIT_URL || "https://stream-director-13gpu9p5.livekit.cloud";
 const roomService = new RoomServiceClient(livekitHost, LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
 
+// --- Helpers sala ---
 async function getRoom(roomId) {
   const data = await redis.get("room:" + roomId);
   return data ? JSON.parse(data) : null;
@@ -48,6 +48,16 @@ async function getRoom(roomId) {
 
 async function setRoom(roomId, room) {
   await redis.set("room:" + roomId, JSON.stringify(room), "EX", 86400);
+}
+
+// --- Helpers cola ---
+async function getQueue(roomId) {
+  const data = await redis.get("queue:" + roomId);
+  return data ? JSON.parse(data) : [];
+}
+
+async function setQueue(roomId, queue) {
+  await redis.set("queue:" + roomId, JSON.stringify(queue), "EX", 86400);
 }
 
 async function makeToken(identity, name, grants) {
@@ -87,30 +97,37 @@ app.post("/api/token/streamer", async (req, res) => {
     const { roomId, participantName } = req.body;
     if (!roomId || !participantName) return res.status(400).json({ error: "Faltan roomId o participantName" });
 
-    // Identidad fija basada en nombre (sin timestamp): si la persona entra dos veces
-    // LiveKit desconecta la sesion anterior automaticamente al usar la misma identity
     const identity = "streamer_" + participantName.trim().toLowerCase().replace(/\s+/g, "_");
+    const name = participantName.trim();
 
-    // Intentar expulsar cualquier sesion previa con esta identity para limpiar de inmediato
+    // Expulsar sesion previa si existe
     try {
       await roomService.removeParticipant(roomId, identity);
       console.log("Sesion previa de " + identity + " eliminada de sala " + roomId);
     } catch (e) {
-      // Normal si no habia sesion previa - ignorar error
+      // Normal si no habia sesion previa
     }
 
-    // Sin canPublishSources: el frontend controla camara/mic manualmente
-    const jwt = await makeToken(
-      identity,
-      participantName.trim(),
-      {
-        roomJoin: true,
-        room: roomId,
-        canPublish: true,
-        canSubscribe: false,
-        canPublishData: true,
-      }
-    );
+    // Gestionar cola: si ya estaba, conservar su posicion original (joinedAt)
+    const queue = await getQueue(roomId);
+    const existing = queue.find(p => p.identity === identity);
+    if (existing) {
+      // Actualizar nombre por si cambio, conservar joinedAt original
+      existing.name = name;
+      existing.reconnectedAt = new Date().toISOString();
+    } else {
+      // Nueva entrada al final de la cola
+      queue.push({ identity, name, joinedAt: new Date().toISOString() });
+    }
+    await setQueue(roomId, queue);
+
+    const jwt = await makeToken(identity, name, {
+      roomJoin: true,
+      room: roomId,
+      canPublish: true,
+      canSubscribe: false,
+      canPublishData: true,
+    });
     res.json({ token: jwt, identity });
   } catch (err) {
     console.error("Error token streamer:", err);
@@ -150,6 +167,32 @@ app.post("/api/token/screen", async (req, res) => {
   }
 });
 
+// Obtener cola ordenada por llegada
+app.get("/api/rooms/:roomId/queue", async (req, res) => {
+  try {
+    const queue = await getQueue(req.params.roomId);
+    res.json({ queue });
+  } catch (err) {
+    console.error("Error al obtener cola:", err);
+    res.status(500).json({ error: "Error al obtener cola" });
+  }
+});
+
+// Remover un participante de la cola (cuando se desconecta)
+app.post("/api/rooms/:roomId/queue/remove", async (req, res) => {
+  try {
+    const { identity } = req.body;
+    if (!identity) return res.status(400).json({ error: "Falta identity" });
+    const queue = await getQueue(req.params.roomId);
+    const updated = queue.filter(p => p.identity !== identity);
+    await setQueue(req.params.roomId, updated);
+    res.json({ ok: true, queue: updated });
+  } catch (err) {
+    console.error("Error al remover de cola:", err);
+    res.status(500).json({ error: "Error al remover de cola" });
+  }
+});
+
 app.post("/api/rooms/:roomId/select", async (req, res) => {
   try {
     const room = await getRoom(req.params.roomId);
@@ -183,6 +226,8 @@ app.post("/api/rooms/:roomId/close", async (req, res) => {
     const room = JSON.parse(raw);
     room.closed = true;
     await redis.set(key, JSON.stringify(room));
+    // Limpiar cola tambien
+    await redis.del("queue:" + roomId.toUpperCase());
     setTimeout(async () => { try { await redis.del(key); } catch (e) {} }, 30000);
     res.json({ ok: true });
   } catch (err) {
