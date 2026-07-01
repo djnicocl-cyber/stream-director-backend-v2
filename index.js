@@ -3,7 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { v4: uuidv4 } = require("uuid");
-const { AccessToken } = require("livekit-server-sdk");
+const { AccessToken, TrackSource } = require("livekit-server-sdk");
 const Redis = require("ioredis");
 
 const app = express();
@@ -84,7 +84,15 @@ app.post("/api/token/streamer", async (req, res) => {
     const jwt = await makeToken(
       `streamer_${participantName}_${Date.now()}`,
       participantName,
-      { roomJoin: true, room: roomId, canPublish: true, canSubscribe: false, canPublishData: true }
+      {
+        roomJoin: true,
+        room: roomId,
+        canPublish: true,
+        // Solo se permite publicar camara - audio bloqueado a nivel de token
+        canPublishSources: [TrackSource.CAMERA],
+        canSubscribe: false,
+        canPublishData: true,
+      }
     );
     res.json({ token: jwt });
   } catch (err) {
@@ -149,7 +157,6 @@ app.get("/api/rooms/:roomId/selected", async (req, res) => {
   }
 });
 
-
 app.post("/api/rooms/:roomId/close", async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -159,13 +166,14 @@ app.post("/api/rooms/:roomId/close", async (req, res) => {
     const room = JSON.parse(raw);
     room.closed = true;
     await redis.set(key, JSON.stringify(room));
-    setTimeout(async()=>{try{await redis.del(key);}catch(e){}},30000);
+    setTimeout(async () => { try { await redis.del(key); } catch (e) {} }, 30000);
     res.json({ ok: true });
   } catch (err) {
     console.error("Error al cerrar sala:", err);
     res.status(500).json({ error: "Error al cerrar sala" });
   }
 });
+
 app.post("/api/auth/operator", (req, res) => {
   try {
     const { password } = req.body;
